@@ -1,4 +1,4 @@
-# GoeBPF-XDP-Block-Allow-Punch
+# GoeBPF-XDP-Simple-Firewall
 - Blocklist
 - Allowlist
 - Port:Protocol Punching / Destination Address
