@@ -6,7 +6,7 @@
 ## Usage
 Compile the BPF bytecode to a ELF file.
 ```bash
-clang -I ../headers -O -target bpf -c ./bpf/xdp.c -o ./bpf/xdp.o
+clang -I ./headers -O -target bpf -c ./bpf/xdp.c -o ./bpf/xdp.o
 ```
 Build the go program.
 ```bash
