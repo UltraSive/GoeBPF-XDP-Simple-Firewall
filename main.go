@@ -18,8 +18,9 @@ type IPData struct {
 }
 
 type PunchData struct {
-	Port     uint16
-	Protocol uint8
+	Port      uint16
+	Protocol  uint8
+	Ratelimit uint16
 }
 
 // Struct to represent the key with 8 bytes identical to the punch map
@@ -40,7 +41,7 @@ func main() {
 	// IP AllowList
 	// Add the IPs you want to be allowed
 	ipAllowList := []string{
-		"47.186.105.124",
+		"47.186.105.1",
 	}
 	// IP port and protocol punching rules
 	// Example data for allowed IP addresses with multiple punchdata
@@ -48,16 +49,16 @@ func main() {
 		{
 			IP: "127.0.0.1",
 			Punch: []PunchData{
-				{80, 6}, // Port: 80, Protocol: TCP (6)
-				{443, 6}, // Port: 443, Protocol: TCP (6)
+				{80, 6, 100}, // Port: 80, Protocol: TCP (6), Ratelimit: 100 PPS
+				{443, 6, 0}, // Port: 443, Protocol: TCP (6), Ratelimit: N/A
 			},
 		},
 		{
 			IP: "216.126.237.26",
 			Punch: []PunchData{
-				{22, 6},
-				{80, 6},
-				{443, 6},
+				{22, 6, 0},
+				//{80, 6, 100},
+				{443, 6, 0},
 			},
 		},
 		// Add more allowed IP data with punchdata as needed

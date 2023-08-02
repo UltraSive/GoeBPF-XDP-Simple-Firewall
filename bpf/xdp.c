@@ -63,6 +63,29 @@ BPF_MAP_DEF(punch_list) = {
 };
 BPF_MAP_ADD(punch_list);
 
+// Function to lookup punch data in the punch_list map
+__u64 lookup_punch_data(__u32 daddr, __u16 dport, __u8 protocol, struct bpf_map_def *punch_list)
+{
+  struct punch_key punch_key_ctx;
+  memset(&punch_key_ctx, 0, sizeof(punch_key_ctx));
+  punch_key_ctx.address = daddr;
+  punch_key_ctx.port = dport;
+  punch_key_ctx.protocol = protocol;
+
+  // Lookup Punch map
+  __u64 *punch_rule_idx = bpf_map_lookup_elem(punch_list, &punch_key_ctx);
+  if (punch_rule_idx)
+  {
+    // Matched, increase match counter for matched "rule"
+    __u32 index = *(__u32 *)punch_rule_idx; // make verifier happy
+    // Return 1 to indicate a match
+    return 1;
+  }
+
+  // Return 0 to indicate no match
+  return 0;
+}
+
 // XDP program //
 SEC("xdp")
 int firewall(struct xdp_md *ctx)
@@ -129,7 +152,19 @@ int firewall(struct xdp_md *ctx)
     break;
   }
   case 0x01: // ICMP protocol
-    // handle_icmp_packet(data, data_end);
+    // Structure object to hold the punch data temporarily
+    /*
+    __u32 icmp_daddr = ip->daddr;
+    __u16 icmp_dport = 0;
+    __u8 icmp_protocol = ip->protocol;
+
+    __u64 icmp_value = lookup_punch_data(icmp_daddr, icmp_dport, icmp_protocol, &punch_list);
+
+    if (icmp_value != 0)
+    {
+      return XDP_PASS;
+    }
+    */
     break;
   default:
     // Other protocols, you can handle or ignore them based on your requirements
@@ -169,20 +204,10 @@ int firewall(struct xdp_md *ctx)
   // Structure object to hold the punch data temporarily
   __u32 daddr = ip->daddr;
   __u16 dport = dst_port;
-  __u8 proto = ip->protocol;
+  __u8 protocol = ip->protocol;
 
-  struct punch_key punch_key_ctx;
-  memset(&punch_key_ctx, 0, sizeof(punch_key_ctx));
-  punch_key_ctx.address = daddr;
-  punch_key_ctx.port = dport;
-  punch_key_ctx.protocol = proto;
-
-  // Lookup Punch map
-  __u64 *punch_rule_idx = bpf_map_lookup_elem(&punch_list, &punch_key_ctx);
-  if (punch_rule_idx)
+  if (lookup_punch_data(daddr, dport, protocol, &punch_list) != 0)
   {
-    // Matched, increase match counter for matched "rule"
-    __u32 index = *(__u32 *)punch_rule_idx; // make verifier happy
     return XDP_PASS;
   }
 
