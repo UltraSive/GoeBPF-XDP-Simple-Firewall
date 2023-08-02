@@ -3,6 +3,10 @@
 - Allowlist
 - Port:Protocol Punching / Destination Address
 
+## Requirements
+- Linux 5.3+
+- GoLang 1.18+
+
 ## Usage
 Compile the BPF bytecode to a ELF file.
 ```bash
