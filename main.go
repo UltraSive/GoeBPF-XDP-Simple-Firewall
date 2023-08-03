@@ -59,6 +59,7 @@ func main() {
 				{22, 6, 0},
 				//{80, 6, 100},
 				{443, 6, 0},
+				{123, 1, 0}, // ICMP
 			},
 		},
 		// Add more allowed IP data with punchdata as needed

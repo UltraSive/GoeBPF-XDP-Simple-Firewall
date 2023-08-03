@@ -154,19 +154,7 @@ int firewall(struct xdp_md *ctx)
     break;
   }
   case 0x01: // ICMP protocol
-    // Structure object to hold the punch data temporarily
-    /*
-    __u32 icmp_daddr = ip->daddr;
-    __u16 icmp_dport = 0;
-    __u8 icmp_protocol = ip->protocol;
-
-    __u64 icmp_value = lookup_punch_data(icmp_daddr, icmp_dport, icmp_protocol, &punch_list);
-
-    if (icmp_value != 0)
-    {
-      return XDP_PASS;
-    }
-    */
+    // We will leave the dst_port = 0 as it is the placeholder we will use for entries for punching ICMP.
     break;
   default:
     // Other protocols, you can handle or ignore them based on your requirements
