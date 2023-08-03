@@ -66,6 +66,8 @@ BPF_MAP_ADD(punch_list);
 // Function to lookup punch data in the punch_list map
 __u64 lookup_punch_data(__u32 daddr, __u16 dport, __u8 protocol, struct bpf_map_def *punch_list)
 {
+  int authorized = 0;
+
   struct punch_key punch_key_ctx;
   memset(&punch_key_ctx, 0, sizeof(punch_key_ctx));
   punch_key_ctx.address = daddr;
@@ -79,11 +81,11 @@ __u64 lookup_punch_data(__u32 daddr, __u16 dport, __u8 protocol, struct bpf_map_
     // Matched, increase match counter for matched "rule"
     __u32 index = *(__u32 *)punch_rule_idx; // make verifier happy
     // Return 1 to indicate a match
-    return 1;
+    authorized = 1;
   }
 
   // Return 0 to indicate no match
-  return 0;
+  return authorized;
 }
 
 // XDP program //
