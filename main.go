@@ -30,6 +30,11 @@ type BPFPunchMapKey struct {
     protocol uint8
 }
 
+type IPBehavior struct {
+	IP       string
+	allow    bool // true == accept default, false == drop default
+}
+
 func main() {
 	// Specify Interface Name
 	interfaceName := "ens3"
@@ -64,6 +69,13 @@ func main() {
 		},
 		// Add more allowed IP data with punchdata as needed
 	}
+	// Default allow or drop behavior per IP
+	defaultBehaviors := []IPBehavior{
+		{
+			IP: "216.126.237.26",
+			allow: true, // Accept default
+		},
+	}
 
 	// Load XDP Into App
 	bpf := goebpf.NewDefaultEbpfSystem()
@@ -78,6 +90,10 @@ func main() {
 	allowlist := bpf.GetMapByName("allowlist")
 	if allowlist == nil {
 		log.Fatalf("eBPF map 'allowlist' not found\n")
+	}
+	defaultBehavior := bpf.GetMapByName("defaultBehavior")
+	if defaultBehavior == nil {
+		log.Fatalf("eBPF map 'defaultBehavior' not found\n")
 	}
 	punch_list := bpf.GetMapByName("punch_list")
 	if punch_list == nil {
@@ -102,13 +118,22 @@ func main() {
     }
 
 	if err := AllowIPAddresses(ipAllowList, allowlist); err != nil {
-		log.Fatalf("Error punching rules: %v", err)
+		log.Fatalf("Error allowing IP addresses: %v", err)
+    }
+
+	if err := SetDefaultBehavior(defaultBehaviors, defaultBehavior); err != nil {
+		log.Fatalf("Error allowing IP addresses: %v", err)
     }
 
 	if err := AllowPunchRules(punchRules, punch_list); err != nil {
         log.Fatalf("Error punching rules: %v", err)
     }
 
+	// Print the content of the maps for troubleshooting
+	log.Println(punch_list)
+	log.Println(defaultBehavior)
+
+	// Execute till interupted
 	defer xdp.Detach()
 	ctrlC := make(chan os.Signal, 1)
 	signal.Notify(ctrlC, os.Interrupt)
@@ -121,6 +146,7 @@ func main() {
 // The function that adds the IPs to the blocklist map
 func BlockIPAddresses(ipAddreses []string, blocklist goebpf.Map) error {
 	for index, ip := range ipAddreses {
+		log.Println(ip)
 		err := blocklist.Insert(goebpf.CreateLPMtrieKey(ip), index)
 		if err != nil {
 			return err
@@ -132,7 +158,27 @@ func BlockIPAddresses(ipAddreses []string, blocklist goebpf.Map) error {
 // The function that adds the IPs to the allowlist map
 func AllowIPAddresses(ipAddreses []string, allowlist goebpf.Map) error {
 	for index, ip := range ipAddreses {
+		log.Println(ip)
 		err := allowlist.Insert(goebpf.CreateLPMtrieKey(ip), index)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// The function that adds the default behaviors to the defaultBehavior map
+func SetDefaultBehavior(ipAddreses []IPBehavior, defaultBehaviorMap goebpf.Map) error {
+	for _, ipBehavior := range ipAddreses {
+		// Set the byte
+		allowValue := byte(0)
+		if ipBehavior.allow {
+			allowValue = byte(1)
+		}
+
+		// Insert it into the map.
+		log.Println(ipBehavior.IP, allowValue)
+		err := defaultBehaviorMap.Insert(goebpf.CreateLPMtrieKey(ipBehavior.IP), allowValue)
 		if err != nil {
 			return err
 		}

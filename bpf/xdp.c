@@ -45,6 +45,15 @@ BPF_MAP_DEF(allowlist) = {
 };
 BPF_MAP_ADD(allowlist);
 
+// BPF Default behavior Map
+BPF_MAP_DEF(defaultBehavior) = {
+    .map_type = BPF_MAP_TYPE_LPM_TRIE,
+    .key_size = sizeof(__u64),
+    .value_size = 1, // allow / drop
+    .max_entries = 16,
+};
+BPF_MAP_ADD(defaultBehavior);
+
 // Define a structure to hold the information you want to associate with each entry.
 struct punch_key
 {
@@ -201,5 +210,27 @@ int firewall(struct xdp_md *ctx)
     return XDP_PASS;
   }
 
+  // Lookup default behavior of IP rules
+  struct
+  {
+    __u32 prefixlen;
+    __u32 saddr;
+  } dest_key;
+
+  dest_key.prefixlen = 32;
+  dest_key.saddr = ip->daddr;
+
+  __u64 *default_behavior_idx = bpf_map_lookup_elem(&defaultBehavior, &dest_key);
+  if (default_behavior_idx)
+  {
+    // Matched, increase match counter for matched "rule"
+    __u8 index = *(__u8 *)default_behavior_idx; // make verifier happy
+    //if (index == 1)
+    //{
+      return XDP_PASS;
+    //}
+  }
+
+  // This accounts for if the default behavior is to drop all not punched or not specified
   return XDP_DROP;
 }

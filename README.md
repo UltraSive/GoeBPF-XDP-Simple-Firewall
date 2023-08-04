@@ -1,7 +1,8 @@
 # GoeBPF-XDP-Simple-Firewall
 - Blocklist
 - Allowlist
-- Port:Protocol Punching / Destination Address
+- Default Behavior (Block / Allow) per Address
+- Port:Protocol Punching per Destination Address
 
 ## Requirements
 - Linux 5.3+
@@ -25,4 +26,5 @@ Run the go program.
 - Ratelimiting / Port:Protocol
 - AF_XDP Socket Redirecting
 - Pulling rules from database established in environment variables.
+- Modification of rule maps while running.
 - Dockerfile to load and run userspace go code.
