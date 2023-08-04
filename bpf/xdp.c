@@ -225,10 +225,10 @@ int firewall(struct xdp_md *ctx)
   {
     // Matched, increase match counter for matched "rule"
     __u8 index = *(__u8 *)default_behavior_idx; // make verifier happy
-    //if (index == 1)
-    //{
+    if (index == 1)
+    {
       return XDP_PASS;
-    //}
+    }
   }
 
   // This accounts for if the default behavior is to drop all not punched or not specified
