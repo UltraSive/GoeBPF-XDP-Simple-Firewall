@@ -18,6 +18,7 @@ type IPData struct {
 }
 
 type PunchData struct {
+	Pass      uint8
 	Port      uint16
 	Protocol  uint8
 	Ratelimit uint16
@@ -54,17 +55,17 @@ func main() {
 		{
 			IP: "127.0.0.1",
 			Punch: []PunchData{
-				{80, 6, 100}, // Port: 80, Protocol: TCP (6), Ratelimit: 100 PPS
-				{443, 6, 0}, // Port: 443, Protocol: TCP (6), Ratelimit: N/A
+				{1, 80, 6, 100}, // Pass: True, Port: 80, Protocol: TCP (6), Ratelimit: 100 PPS
+				{0, 443, 6, 0}, // Pass: False, Port: 443, Protocol: TCP (6), Ratelimit: N/A
 			},
 		},
 		{
 			IP: "216.126.237.26",
 			Punch: []PunchData{
-				{22, 6, 0},
-				//{80, 6, 100},
-				{443, 6, 0},
-				{123, 1, 0}, // ICMP
+				{1, 22, 6, 0},
+				//{1, 80, 6, 100},
+				{1, 443, 6, 0},
+				{1, 123, 1, 0}, // ICMP
 			},
 		},
 		// Add more allowed IP data with punchdata as needed
@@ -205,9 +206,9 @@ func AllowPunchRules(punchRules []IPData, allowed goebpf.Map) error {
             keyBytes[6] = key.protocol
             // No need to set the last byte (padding) since it's automatically initialized to 0s.
 
-			log.Println(key, keyBytes)
+			log.Println(key, keyBytes, byte(punchData.Pass))
 
-            err := allowed.Insert(keyBytes, 0) // Use nil since the value is not needed verifying rules.
+            err := allowed.Insert(keyBytes, byte(punchData.Pass)) // Use nil since the value is not needed verifying rules.
             if err != nil {
                 return err
             }

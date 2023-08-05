@@ -67,7 +67,7 @@ struct punch_key
 BPF_MAP_DEF(punch_list) = {
     .map_type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(struct punch_key),
-    .value_size = 32, // Small value size (1 byte) since we don't need to store significant data. If we know the key exists we can pass it.
+    .value_size = 1, // Small value size (1 byte) since we don't need to store significant data. If we know the key exists we can pass it.
     .max_entries = 1024,
 };
 BPF_MAP_ADD(punch_list);
@@ -75,7 +75,7 @@ BPF_MAP_ADD(punch_list);
 // Function to lookup punch data in the punch_list map
 __u64 lookup_punch_data(__u32 daddr, __u16 dport, __u8 protocol, struct bpf_map_def *punch_list)
 {
-  int authorized = 0;
+  int authorized = 2; // 2 results in no action; 1 to pass; 0 to drop.
 
   struct punch_key punch_key_ctx;
   memset(&punch_key_ctx, 0, sizeof(punch_key_ctx));
@@ -88,12 +88,11 @@ __u64 lookup_punch_data(__u32 daddr, __u16 dport, __u8 protocol, struct bpf_map_
   if (punch_rule_idx)
   {
     // Matched, increase match counter for matched "rule"
-    __u32 index = *(__u32 *)punch_rule_idx; // make verifier happy
+    __u8 index = *(__u8 *)punch_rule_idx; // make verifier happy
     // Return 1 to indicate a match
-    authorized = 1;
+    authorized = index;
   }
 
-  // Return 0 to indicate no match
   return authorized;
 }
 
@@ -205,9 +204,14 @@ int firewall(struct xdp_md *ctx)
   __u16 dport = dst_port;
   __u8 protocol = ip->protocol;
 
-  if (lookup_punch_data(daddr, dport, protocol, &punch_list) != 0)
+  int punchPass = lookup_punch_data(daddr, dport, protocol, &punch_list);
+
+  if (punchPass == 1)
   {
     return XDP_PASS;
+  } else if (punchPass == 0)
+  {
+    return XDP_DROP;
   }
 
   // Lookup default behavior of IP rules
