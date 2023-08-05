@@ -2,7 +2,7 @@
 - Blocklist
 - Allowlist
 - Default Behavior (Block / Allow) per Address
-- Port:Protocol Punching per Destination Address
+- Port:Protocol Punching (Block / Allow) per Destination Address
 
 ## Requirements
 - Linux 5.3+
