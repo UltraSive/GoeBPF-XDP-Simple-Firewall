@@ -2,7 +2,7 @@
 - Universal Source Address Rules (Block / Allow)
 - Source Address & Destination Address Pair (Block / Allow)
 - Port:Protocol Punching (Block / Allow) per Destination Address
-- Default Behavior (Block / Allow) per Address
+- Default Behavior (Block / Allow) per Destination Address
 
 ## Requirements
 - Linux 5.3+
