@@ -23,7 +23,7 @@ Run the go program.
 ```
 
 ## To Do
-- Ratelimiting / Port:Protocol
+- Ratelimiting / Port:Protocol || PPS per Connection
 - AF_XDP Socket Redirecting
 - Pulling rules from database established in environment variables.
 - Modification of rule maps while running.
