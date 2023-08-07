@@ -1,8 +1,8 @@
 # GoeBPF-XDP-Simple-Firewall
 - Blocklist
 - Source Address & Destination Address Pair (Block / Allow)
-- Default Behavior (Block / Allow) per Address
 - Port:Protocol Punching (Block / Allow) per Destination Address
+- Default Behavior (Block / Allow) per Address
 
 ## Requirements
 - Linux 5.3+
