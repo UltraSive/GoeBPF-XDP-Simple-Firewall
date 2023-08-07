@@ -28,13 +28,13 @@ struct iphdr
 } __attribute__((packed));
 
 // BPF Blocklist Map
-BPF_MAP_DEF(blocklist) = {
+BPF_MAP_DEF(sourcelist) = {
     .map_type = BPF_MAP_TYPE_LPM_TRIE,
     .key_size = sizeof(__u64),
     .value_size = 1, // Small value size (1 byte) since we don't need to store significant data. If we know the key exists we can pass it.
     .max_entries = 16,
 };
-BPF_MAP_ADD(blocklist);
+BPF_MAP_ADD(sourcelist);
 
 // BPF addressPair Map key structure
 struct ipPair
@@ -198,12 +198,19 @@ int firewall(struct xdp_md *ctx)
   key.saddr = saddr;
 
   // Lookup SRC IP in blocklisted IPs
-  __u64 *block_rule_idx = bpf_map_lookup_elem(&blocklist, &key);
-  if (block_rule_idx)
+  __u64 *source_rule_idx = bpf_map_lookup_elem(&sourcelist, &key);
+  if (source_rule_idx)
   {
     // Matched, increase match counter for matched "rule"
-    __u32 index = *(__u32 *)block_rule_idx; // make verifier happy
-    return XDP_DROP;
+    __u8 index = *(__u8 *)source_rule_idx; // make verifier happy
+    if (index == 1)
+    {
+      return XDP_PASS;
+    }
+    else if (index == 0)
+    {
+      return XDP_DROP;
+    }
   }
 
   // Structure object to hold the ipPair data format

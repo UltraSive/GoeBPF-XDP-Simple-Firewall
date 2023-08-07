@@ -11,6 +11,12 @@ import (
 	"github.com/dropbox/goebpf"
 )
 
+// Simple source address block / accept structure.
+type sourceIP struct {
+	saddr  string
+	allow  bool
+}
+
 // IP Pairs and whether to block or allow stucture.
 type ipPair struct {
 	saddr  string
@@ -52,10 +58,11 @@ type IPBehavior struct {
 func main() {
 	// Specify Interface Name
 	interfaceName := "ens3"
-	// IP BlockList
-	// Add the IPs you want to be blocked
-	ipBlockList := []string{
-		"45.32.193.1",
+	// IP source list
+	// Add the IPs you want to be blocked or allowed universally.
+	ipSourceList := []sourceIP{
+		{"47.186.105.124", true}, // Allow universally from this address.
+		{"45.32.193.17", false}, // Block universally from this address.
 	}
 	// IP AllowList
 	// Add the IPs you want to be allowed
@@ -78,8 +85,8 @@ func main() {
 			Punch: []PunchData{
 				{1, 22, 6, 0},
 				{1, 80, 6, 100},
-				{1, 443, 6, 0},
-				{1, 123, 1, 0}, // ICMP
+				{0, 443, 6, 0},
+				{1, 0, 1, 0}, // ICMP
 			},
 		},
 		// Add more allowed IP data with punchdata as needed
@@ -98,9 +105,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("LoadELF() failed: %s", err)
 	}
-	blocklist := bpf.GetMapByName("blocklist")
-	if blocklist == nil {
-		log.Fatalf("eBPF map 'blocklist' not found\n")
+	sourcelist := bpf.GetMapByName("sourcelist")
+	if sourcelist == nil {
+		log.Fatalf("eBPF map 'sourcelist' not found\n")
 	}
 	addressPair := bpf.GetMapByName("addressPair")
 	if addressPair == nil {
@@ -128,7 +135,7 @@ func main() {
 	}
 
 	// Load the rules into maps.
-	if err := BlockIPAddresses(ipBlockList, blocklist); err != nil {
+	if err := SourceIPAddresses(ipSourceList, sourcelist); err != nil {
         log.Fatalf("Error blocking IP addresses: %v", err)
     }
 
@@ -144,10 +151,6 @@ func main() {
         log.Fatalf("Error punching rules: %v", err)
     }
 
-	// Print the content of the maps for troubleshooting.
-	log.Println(punch_list)
-	log.Println(defaultBehavior)
-
 	// Execute till interupted
 	defer xdp.Detach()
 	ctrlC := make(chan os.Signal, 1)
@@ -158,11 +161,18 @@ func main() {
 
 }
 
-// The function that adds the IPs to the blocklist map.
-func BlockIPAddresses(ipAddreses []string, blocklist goebpf.Map) error {
-	for index, ip := range ipAddreses {
-		log.Println(ip)
-		err := blocklist.Insert(goebpf.CreateLPMtrieKey(ip), index)
+// The function that adds the IPs to the sourcelist map.
+func SourceIPAddresses(ipAddreses []sourceIP, sourcelist goebpf.Map) error {
+	for _, source := range ipAddreses {
+		log.Println(source.saddr, source.allow)
+
+		// Set the value allow byte
+		allowValue := byte(0)
+		if source.allow {
+			allowValue = byte(1)
+		}
+
+		err := sourcelist.Insert(goebpf.CreateLPMtrieKey(source.saddr), allowValue)
 		if err != nil {
 			return err
 		}
