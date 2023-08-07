@@ -31,28 +31,26 @@ struct iphdr
 BPF_MAP_DEF(blocklist) = {
     .map_type = BPF_MAP_TYPE_LPM_TRIE,
     .key_size = sizeof(__u64),
-    .value_size = 32, // Small value size (1 byte) since we don't need to store significant data. If we know the key exists we can pass it.
+    .value_size = 1, // Small value size (1 byte) since we don't need to store significant data. If we know the key exists we can pass it.
     .max_entries = 16,
 };
 BPF_MAP_ADD(blocklist);
 
-// BPF allowedIPs Map
-BPF_MAP_DEF(allowlist) = {
-    .map_type = BPF_MAP_TYPE_LPM_TRIE,
-    .key_size = sizeof(__u64),
-    .value_size = 32, // Small value size (1 byte) since we don't need to store significant data. If we know the key exists we can pass it.
-    .max_entries = 16,
+// BPF addressPair Map key structure
+struct ipPair
+{
+  __u32 source_address;
+  __u32 destination_address;
 };
-BPF_MAP_ADD(allowlist);
 
-// BPF Default behavior Map
-BPF_MAP_DEF(defaultBehavior) = {
-    .map_type = BPF_MAP_TYPE_LPM_TRIE,
-    .key_size = sizeof(__u64),
-    .value_size = 1, // allow / drop
+// BPF addressPair Map
+BPF_MAP_DEF(addressPair) = {
+    .map_type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(struct ipPair),
+    .value_size = 1, // Small value size (1 byte) since we don't need to store significant data. If we know the key exists we can pass it.
     .max_entries = 16,
 };
-BPF_MAP_ADD(defaultBehavior);
+BPF_MAP_ADD(addressPair);
 
 // Define a structure to hold the information you want to associate with each entry.
 struct punch_key
@@ -62,15 +60,29 @@ struct punch_key
   __u8 protocol; // 8-bit Protocol number
   __u8 padding;
 };
+struct punch_value
+{
+  __u8 pass;      // 8-bit allow/block value
+  __u64 previous; // 64-bit kernel ns time
+};
 
 // BPF punch Map
 BPF_MAP_DEF(punch_list) = {
     .map_type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(struct punch_key),
-    .value_size = 1, // Small value size (1 byte) since we don't need to store significant data. If we know the key exists we can pass it.
+    .value_size = sizeof(struct punch_value), // Small value size (1 byte) since we don't need to store significant data. If we know the key exists we can pass it.
     .max_entries = 1024,
 };
 BPF_MAP_ADD(punch_list);
+
+// BPF Default behavior Map
+BPF_MAP_DEF(defaultBehavior) = {
+    .map_type = BPF_MAP_TYPE_LPM_TRIE,
+    .key_size = sizeof(__u64),
+    .value_size = 1, // allow / drop
+    .max_entries = 16,
+};
+BPF_MAP_ADD(defaultBehavior);
 
 // Function to lookup punch data in the punch_list map
 __u64 lookup_punch_data(__u32 daddr, __u16 dport, __u8 protocol, struct bpf_map_def *punch_list)
@@ -169,9 +181,13 @@ int firewall(struct xdp_md *ctx)
     return XDP_PASS;
   }
 
-  /*
-  Structure object to hold the blocklist data in MAP_LPM_TRIE format
-  */
+  // Structure object to hold the packet header data temporarily
+  __u32 saddr = ip->saddr;
+  __u32 daddr = ip->daddr;
+  __u16 dport = dst_port;
+  __u8 protocol = ip->protocol;
+
+  // Structure object to hold the blocklist data in MAP_LPM_TRIE format
   struct
   {
     __u32 prefixlen;
@@ -179,7 +195,7 @@ int firewall(struct xdp_md *ctx)
   } key;
 
   key.prefixlen = 32;
-  key.saddr = ip->saddr;
+  key.saddr = saddr;
 
   // Lookup SRC IP in blocklisted IPs
   __u64 *block_rule_idx = bpf_map_lookup_elem(&blocklist, &key);
@@ -190,26 +206,35 @@ int firewall(struct xdp_md *ctx)
     return XDP_DROP;
   }
 
+  // Structure object to hold the ipPair data format
+  struct ipPair pair_key_ctx;
+  memset(&pair_key_ctx, 0, sizeof(pair_key_ctx));
+  pair_key_ctx.source_address = saddr;
+  pair_key_ctx.destination_address = daddr;
+
   // Lookup SRC IP in allowlisted IPs
-  __u64 *allow_rule_idx = bpf_map_lookup_elem(&allowlist, &key);
-  if (allow_rule_idx)
+  __u64 *pair_rule_idx = bpf_map_lookup_elem(&addressPair, &pair_key_ctx);
+  if (pair_rule_idx)
   {
     // Matched, increase match counter for matched "rule"
-    __u32 index = *(__u32 *)allow_rule_idx; // make verifier happy
-    return XDP_PASS;
+    __u8 index = *(__u8 *)pair_rule_idx; // make verifier happy
+    if (index == 1)
+    {
+      return XDP_PASS;
+    }
+    else if (index == 0)
+    {
+      return XDP_DROP;
+    }
   }
-
-  // Structure object to hold the punch data temporarily
-  __u32 daddr = ip->daddr;
-  __u16 dport = dst_port;
-  __u8 protocol = ip->protocol;
 
   int punchPass = lookup_punch_data(daddr, dport, protocol, &punch_list);
 
   if (punchPass == 1)
   {
     return XDP_PASS;
-  } else if (punchPass == 0)
+  }
+  else if (punchPass == 0)
   {
     return XDP_DROP;
   }
@@ -222,7 +247,7 @@ int firewall(struct xdp_md *ctx)
   } dest_key;
 
   dest_key.prefixlen = 32;
-  dest_key.saddr = ip->daddr;
+  dest_key.saddr = daddr;
 
   __u64 *default_behavior_idx = bpf_map_lookup_elem(&defaultBehavior, &dest_key);
   if (default_behavior_idx)

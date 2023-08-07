@@ -11,6 +11,19 @@ import (
 	"github.com/dropbox/goebpf"
 )
 
+// IP Pairs and whether to block or allow stucture.
+type ipPair struct {
+	saddr  string
+	daddr  string
+	allow  bool
+}
+
+// Struct to represent the key with 8 bytes identical to the ipPair map
+type BPFAddressPairMapKey struct {
+    saddr  uint32
+	daddr  uint32
+}
+
 // IP data for use with port punching whitelist
 type IPData struct {
 	IP       string
@@ -42,12 +55,13 @@ func main() {
 	// IP BlockList
 	// Add the IPs you want to be blocked
 	ipBlockList := []string{
-		"45.32.193.17",
+		"45.32.193.1",
 	}
 	// IP AllowList
 	// Add the IPs you want to be allowed
-	ipAllowList := []string{
-		"47.186.105.1",
+	ipPairList := []ipPair{
+		{"47.186.105.124", "216.126.237.26", true}, // allow
+		{"45.32.193.17", "216.126.237.26", false}, // block
 	}
 	// IP port and protocol punching rules
 	// Example data for allowed IP addresses with multiple punchdata
@@ -63,7 +77,7 @@ func main() {
 			IP: "216.126.237.26",
 			Punch: []PunchData{
 				{1, 22, 6, 0},
-				//{1, 80, 6, 100},
+				{1, 80, 6, 100},
 				{1, 443, 6, 0},
 				{1, 123, 1, 0}, // ICMP
 			},
@@ -74,7 +88,7 @@ func main() {
 	defaultBehaviors := []IPBehavior{
 		{
 			IP: "216.126.237.26",
-			allow: true, // Accept default
+			allow: false, // Accept default
 		},
 	}
 
@@ -88,9 +102,9 @@ func main() {
 	if blocklist == nil {
 		log.Fatalf("eBPF map 'blocklist' not found\n")
 	}
-	allowlist := bpf.GetMapByName("allowlist")
-	if allowlist == nil {
-		log.Fatalf("eBPF map 'allowlist' not found\n")
+	addressPair := bpf.GetMapByName("addressPair")
+	if addressPair == nil {
+		log.Fatalf("eBPF map 'addressPair' not found\n")
 	}
 	defaultBehavior := bpf.GetMapByName("defaultBehavior")
 	if defaultBehavior == nil {
@@ -113,13 +127,13 @@ func main() {
 		log.Fatalf("Error attaching to Interface: %s", err)
 	}
 
-	// Load the rules into maps
+	// Load the rules into maps.
 	if err := BlockIPAddresses(ipBlockList, blocklist); err != nil {
         log.Fatalf("Error blocking IP addresses: %v", err)
     }
 
-	if err := AllowIPAddresses(ipAllowList, allowlist); err != nil {
-		log.Fatalf("Error allowing IP addresses: %v", err)
+	if err := SetAddressesPairs(ipPairList, addressPair); err != nil {
+		log.Fatalf("Error setting IP address pair list rules: %v", err)
     }
 
 	if err := SetDefaultBehavior(defaultBehaviors, defaultBehavior); err != nil {
@@ -130,7 +144,7 @@ func main() {
         log.Fatalf("Error punching rules: %v", err)
     }
 
-	// Print the content of the maps for troubleshooting
+	// Print the content of the maps for troubleshooting.
 	log.Println(punch_list)
 	log.Println(defaultBehavior)
 
@@ -144,7 +158,7 @@ func main() {
 
 }
 
-// The function that adds the IPs to the blocklist map
+// The function that adds the IPs to the blocklist map.
 func BlockIPAddresses(ipAddreses []string, blocklist goebpf.Map) error {
 	for index, ip := range ipAddreses {
 		log.Println(ip)
@@ -156,11 +170,28 @@ func BlockIPAddresses(ipAddreses []string, blocklist goebpf.Map) error {
 	return nil
 }
 
-// The function that adds the IPs to the allowlist map
-func AllowIPAddresses(ipAddreses []string, allowlist goebpf.Map) error {
-	for index, ip := range ipAddreses {
-		log.Println(ip)
-		err := allowlist.Insert(goebpf.CreateLPMtrieKey(ip), index)
+// The function that adds the IP pairs to the addressPair map with the corresponding value for pass or drop.
+func SetAddressesPairs(ipPairList []ipPair, addressPair goebpf.Map) error {
+	for _, ipPair := range ipPairList {
+		log.Println(ipPair.saddr, ipPair.daddr, ipPair.allow)
+		// Create the key struct
+		key := BPFAddressPairMapKey {
+			saddr: binary.BigEndian.Uint32(net.ParseIP(ipPair.saddr).To4()),
+			daddr: binary.BigEndian.Uint32(net.ParseIP(ipPair.daddr).To4()),
+		}
+
+		// Convert the key struct to a byte slice thats compatible with the 64 bit map
+		keyBytes := make([]byte, 8)
+		binary.BigEndian.PutUint32(keyBytes[:4], key.saddr)
+		binary.BigEndian.PutUint32(keyBytes[4:], key.daddr)
+
+		// Set the value allow byte
+		allowValue := byte(0)
+		if ipPair.allow {
+			allowValue = byte(1)
+		}
+
+		err := addressPair.Insert(keyBytes, allowValue)
 		if err != nil {
 			return err
 		}
@@ -168,7 +199,7 @@ func AllowIPAddresses(ipAddreses []string, allowlist goebpf.Map) error {
 	return nil
 }
 
-// The function that adds the default behaviors to the defaultBehavior map
+// The function that adds the default behaviors to the defaultBehavior map.
 func SetDefaultBehavior(ipAddreses []IPBehavior, defaultBehaviorMap goebpf.Map) error {
 	for _, ipBehavior := range ipAddreses {
 		// Set the byte
@@ -187,13 +218,13 @@ func SetDefaultBehavior(ipAddreses []IPBehavior, defaultBehaviorMap goebpf.Map) 
 	return nil
 }
 
-// The function that adds the rules to the allowed BPF_MAP
+// The function that adds the rules to the allowed BPF_MAP.
 func AllowPunchRules(punchRules []IPData, allowed goebpf.Map) error {
     for _, data := range punchRules {
 		log.Println(data)
         for _, punchData := range data.Punch {
 			// Create the key struct
-            key := BPFPunchMapKey{
+            key := BPFPunchMapKey {
                 address:  binary.BigEndian.Uint32(net.ParseIP(data.IP).To4()),
                 port:     punchData.Port,
                 protocol: punchData.Protocol,
