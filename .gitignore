@@ -1,0 +1,8 @@
+# ignore ALL executable linker format
+*.o
+
+# ignore the go build executable
+xdp-firewall
+
+# ignore environment variables
+.env

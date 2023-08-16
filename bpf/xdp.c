@@ -27,7 +27,51 @@ struct iphdr
   __u32 daddr;
 } __attribute__((packed));
 
-// BPF Blocklist Map
+/*
+ * Stats collection for monitoring performance.
+ */
+// BPF map for storing total bytes blocked and passed
+BPF_MAP_DEF(totalByteStats) = {
+    .map_type = BPF_MAP_TYPE_ARRAY,
+    .key_size = sizeof(__u32),
+    .value_size = sizeof(__u64),
+    .max_entries = 2, // You need 2 entries for blocked and passed bytes
+};
+BPF_MAP_ADD(totalByteStats);
+
+__attribute__((always_inline)) void update_byte_stats(__u32 map_key, __u64 packet_size)
+{
+  __u64 *byte_counter = bpf_map_lookup_elem(&totalByteStats, &map_key);
+  if (byte_counter)
+  {
+    *byte_counter += packet_size;
+    bpf_map_update_elem(&totalByteStats, &map_key, byte_counter, BPF_ANY);
+  }
+}
+
+// BPF map for storing total bytes blocked and passed
+BPF_MAP_DEF(totalPktStats) = {
+    .map_type = BPF_MAP_TYPE_ARRAY,
+    .key_size = sizeof(__u32),
+    .value_size = sizeof(__u64),
+    .max_entries = 5, 
+};
+BPF_MAP_ADD(totalPktStats);
+
+__attribute__((always_inline)) void update_packet_stats(__u32 map_key)
+{
+  __u64 *packet_counter = bpf_map_lookup_elem(&totalPktStats, &map_key);
+  if (packet_counter)
+  {
+    *packet_counter += 1;
+    bpf_map_update_elem(&totalPktStats, &map_key, packet_counter, BPF_ANY);
+  }
+}
+
+/*
+ * Maps for the rules that the XDP programs needs to block and allow.
+ */
+// BPF sourcelist Map
 BPF_MAP_DEF(sourcelist) = {
     .map_type = BPF_MAP_TYPE_LPM_TRIE,
     .key_size = sizeof(__u64),
@@ -112,6 +156,15 @@ __u64 lookup_punch_data(__u32 daddr, __u16 dport, __u8 protocol, struct bpf_map_
 SEC("xdp")
 int firewall(struct xdp_md *ctx)
 {
+  __u32 key_bytes_dropped = 0;
+  __u32 key_bytes_passed = 1;
+
+  __u32 key_packets_dropped = 0;
+  __u32 key_packets_passed = 1;
+  __u32 key_packets_aborted = 2;
+  __u32 key_packets_tx = 3;
+  __u32 key_packets_redirect = 4;
+
   const char fmt_str[] = "Hello, world, from BPF!";
   bpf_printk(fmt_str, sizeof(fmt_str));
 
@@ -123,12 +176,14 @@ int firewall(struct xdp_md *ctx)
   if (data + sizeof(*ether) > data_end)
   {
     // Malformed Ethernet header
+    update_packet_stats(key_packets_aborted);
     return XDP_ABORTED;
   }
 
   if (ether->h_proto != 0x08U)
   { // htons(ETH_P_IP) -> 0x08U
     // Non IPv4 traffic
+    //update_packet_stats(key_packets_passed);
     return XDP_PASS;
   }
 
@@ -137,6 +192,7 @@ int firewall(struct xdp_md *ctx)
   if (data + sizeof(*ip) > data_end)
   {
     // Malformed IPv4 header
+    update_packet_stats(key_packets_aborted);
     return XDP_ABORTED;
   }
 
@@ -151,6 +207,7 @@ int firewall(struct xdp_md *ctx)
     if (data + sizeof(struct tcphdr) > data_end)
     {
       // Malformed TCP header
+      update_packet_stats(key_packets_aborted);
       return XDP_ABORTED;
     }
     struct tcphdr *tcp = data;
@@ -165,6 +222,7 @@ int firewall(struct xdp_md *ctx)
     if (data + sizeof(struct udphdr) > data_end)
     {
       // Malformed UDP header
+      update_packet_stats(key_packets_aborted);
       return XDP_ABORTED;
     }
     struct udphdr *udp = data;
@@ -178,6 +236,8 @@ int firewall(struct xdp_md *ctx)
     break;
   default:
     // Other protocols, you can handle or ignore them based on your requirements
+    update_packet_stats(key_packets_passed);
+    update_byte_stats(key_bytes_passed, ip->tot_len);
     return XDP_PASS;
   }
 
@@ -197,7 +257,7 @@ int firewall(struct xdp_md *ctx)
   key.prefixlen = 32;
   key.saddr = saddr;
 
-  // Lookup SRC IP in blocklisted IPs
+  // Lookup SRC IP in sourcelist IPs
   __u64 *source_rule_idx = bpf_map_lookup_elem(&sourcelist, &key);
   if (source_rule_idx)
   {
@@ -205,10 +265,14 @@ int firewall(struct xdp_md *ctx)
     __u8 index = *(__u8 *)source_rule_idx; // make verifier happy
     if (index == 1)
     {
+      update_packet_stats(key_packets_passed);
+      update_byte_stats(key_bytes_passed, ip->tot_len);
       return XDP_PASS;
     }
     else if (index == 0)
     {
+      update_packet_stats(key_packets_dropped);
+      update_byte_stats(key_bytes_dropped, ip->tot_len);
       return XDP_DROP;
     }
   }
@@ -227,10 +291,14 @@ int firewall(struct xdp_md *ctx)
     __u8 index = *(__u8 *)pair_rule_idx; // make verifier happy
     if (index == 1)
     {
+      update_packet_stats(key_packets_passed);
+      update_byte_stats(key_bytes_passed, ip->tot_len);
       return XDP_PASS;
     }
     else if (index == 0)
     {
+      update_packet_stats(key_packets_dropped);
+      update_byte_stats(key_bytes_dropped, ip->tot_len);
       return XDP_DROP;
     }
   }
@@ -239,10 +307,14 @@ int firewall(struct xdp_md *ctx)
 
   if (punchPass == 1)
   {
+    update_packet_stats(key_packets_passed);
+    update_byte_stats(key_bytes_passed, ip->tot_len);
     return XDP_PASS;
   }
   else if (punchPass == 0)
   {
+    update_packet_stats(key_packets_dropped);
+    update_byte_stats(key_bytes_dropped, ip->tot_len);
     return XDP_DROP;
   }
 
@@ -263,10 +335,14 @@ int firewall(struct xdp_md *ctx)
     __u8 index = *(__u8 *)default_behavior_idx; // make verifier happy
     if (index == 1)
     {
+      update_packet_stats(key_packets_passed);
+      update_byte_stats(key_bytes_passed, ip->tot_len);
       return XDP_PASS;
     }
   }
 
   // This accounts for if the default behavior is to drop all not punched or not specified
+  update_packet_stats(key_packets_dropped);
+  update_byte_stats(key_bytes_dropped, ip->tot_len);
   return XDP_DROP;
 }

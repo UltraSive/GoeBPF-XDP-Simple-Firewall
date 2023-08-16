@@ -7,6 +7,7 @@ import (
 	"net"
 	"encoding/binary"
 	"os/signal"
+	"time"
 
 	"github.com/dropbox/goebpf"
 )
@@ -62,7 +63,7 @@ func main() {
 	// Add the IPs you want to be blocked or allowed universally.
 	ipSourceList := []sourceIP{
 		{"47.186.105.124", true}, // Allow universally from this address.
-		{"45.32.193.17", false}, // Block universally from this address.
+		{"45.32.193.177", false}, // Block universally from this address.
 	}
 	// IP AllowList
 	// Add the IPs you want to be allowed
@@ -85,7 +86,7 @@ func main() {
 			Punch: []PunchData{
 				{1, 22, 6, 0},
 				{1, 80, 6, 100},
-				{0, 443, 6, 0},
+				{1, 443, 6, 0},
 				{1, 0, 1, 0}, // ICMP
 			},
 		},
@@ -95,7 +96,7 @@ func main() {
 	defaultBehaviors := []IPBehavior{
 		{
 			IP: "216.126.237.26",
-			allow: false, // Accept default
+			allow: true, // Accept default
 		},
 	}
 
@@ -104,6 +105,14 @@ func main() {
 	err := bpf.LoadElf("bpf/xdp.o")
 	if err != nil {
 		log.Fatalf("LoadELF() failed: %s", err)
+	}
+	totalPktStatsMap := bpf.GetMapByName("totalPktStats")
+	if totalPktStatsMap == nil {
+		log.Fatalf("eBPF map 'totalPktStatsMap' not found\n")
+	}
+	totalByteStatsMap := bpf.GetMapByName("totalByteStats")
+	if totalByteStatsMap == nil {
+		log.Fatalf("eBPF map 'totalByteStatsMap' not found\n")
 	}
 	sourcelist := bpf.GetMapByName("sourcelist")
 	if sourcelist == nil {
@@ -155,10 +164,80 @@ func main() {
 	defer xdp.Detach()
 	ctrlC := make(chan os.Signal, 1)
 	signal.Notify(ctrlC, os.Interrupt)
-	log.Println("XDP Program Loaded successfuly into the Kernel.")
+
+	// Start a Goroutine to print the increasing integer count
+	statsCh := make(chan int)
+	go printStats(statsCh, totalByteStatsMap, totalPktStatsMap)
+
+	log.Println("XDP Program Loaded successfully into the Kernel.")
 	log.Println("Press CTRL+C to stop.")
 	<-ctrlC
+	close(statsCh)
+}
 
+func printStats(statsCh chan int, byteStatsMap goebpf.Map, packetStatsMap goebpf.Map) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			/*
+			 * Bytes
+			*/
+			// Perform map lookup and update.
+			var bytesKey uint32 = 1
+			bytesValue, err := byteStatsMap.Lookup(bytesKey)
+			if err == nil {
+				bytesPassed := binary.LittleEndian.Uint64(bytesValue)
+				kbps := float64(bytesPassed*8) / 1000
+				mbps := float64(bytesPassed*8) / (1000 * 1000)
+				log.Printf("Bytes Passed / Second: %d", bytesPassed)
+				log.Printf("Kb/s: %f", kbps)
+				log.Printf("Mb/s: %f", mbps)
+			} else {
+				log.Printf("Error looking up byteStats map: %v", err)
+			}
+			err = byteStatsMap.Update(bytesKey, uint64(0))
+			if err != nil {
+				log.Printf("Error inserting value into byteStats map: %v", err)
+			}
+
+			/*
+			 * Packets
+			*/
+			// Passed / Sec
+			var packetKey uint32 = 1
+			packetValue, err := packetStatsMap.Lookup(packetKey)
+			if err == nil {
+				packetsPassed := binary.LittleEndian.Uint64(packetValue)
+				log.Printf("Packets Passed / Second: %d", packetsPassed)
+			} else {
+				log.Printf("Error looking up packetStats map: %v", err)
+			}
+			err = packetStatsMap.Update(packetKey, uint64(0))
+			if err != nil {
+				log.Printf("Error inserting value into packetStats map: %v", err)
+			}
+
+			// Dropped / Sec
+			var packetDropKey uint32 = 0
+			packetDropValue, err := packetStatsMap.Lookup(packetDropKey)
+			if err == nil {
+				packetsDropped := binary.LittleEndian.Uint64(packetDropValue)
+				log.Printf("Packets Dropped / Second: %d", packetsDropped)
+			} else {
+				log.Printf("Error looking up packetStats map: %v", err)
+			}
+			err = packetStatsMap.Update(packetDropKey, uint64(0))
+			if err != nil {
+				log.Printf("Error inserting value into packetStats map: %v", err)
+			}
+
+		case <-statsCh:
+			return
+		}
+	}
 }
 
 // The function that adds the IPs to the sourcelist map.
@@ -257,3 +336,27 @@ func AllowPunchRules(punchRules []IPData, allowed goebpf.Map) error {
     }
     return nil
 }
+/*
+// Helper function to read and display statistics from a map
+func readAndDisplayStatistics(bpfMap goebpf.Map, mapName string) {
+    var keys []uint32
+    var values []uint64
+
+    // Iterate over the map to retrieve keys and values
+    err := bpfMap.Iterate(nil, func(key, value []byte) int {
+        keys = append(keys, binary.BigEndian.Uint32(key))
+        values = append(values, binary.LittleEndian.Uint64(value))
+        return 0
+    })
+    if err != nil {
+        log.Fatalf("Error iterating over %s map: %v", mapName, err)
+    }
+
+    // Display statistics
+    fmt.Printf("Statistics from %s map:\n", mapName)
+    for i, key := range keys {
+        fmt.Printf("Key: %d, Value: %d\n", key, values[i])
+    }
+    fmt.Println()
+}
+*/
