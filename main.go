@@ -41,7 +41,7 @@ type PunchData struct {
 	Pass      uint8
 	Port      uint16
 	Protocol  uint8
-	Ratelimit uint16
+	Ratelimit uint32
 }
 
 // Struct to represent the key with 8 bytes identical to the punch map
@@ -51,6 +51,13 @@ type BPFPunchMapKey struct {
     protocol uint8
 }
 
+// Struct to represent the value identical to the punch map
+type BPFPunchMapValue struct {
+    pass     uint8
+    pps      uint32
+    previous uint64 // Set to 0s at init.
+}
+
 type IPBehavior struct {
 	IP       string
 	allow    bool // true == accept default, false == drop default
@@ -58,11 +65,11 @@ type IPBehavior struct {
 
 func main() {
 	// Specify Interface Name
-	interfaceName := "ens3"
+	interfaceName := "wlo1"
 	// IP source list
 	// Add the IPs you want to be blocked or allowed universally.
 	ipSourceList := []sourceIP{
-		{"47.186.105.124", true}, // Allow universally from this address.
+		{"192.168.0.135", true}, // Allow universally from this address.
 		{"45.32.193.177", false}, // Block universally from this address.
 	}
 	// IP AllowList
@@ -82,7 +89,7 @@ func main() {
 			},
 		},
 		{
-			IP: "216.126.237.26",
+			IP: "192.168.0.116",
 			Punch: []PunchData{
 				{1, 22, 6, 0},
 				{1, 80, 6, 100},
@@ -156,7 +163,7 @@ func main() {
 		log.Fatalf("Error allowing IP addresses: %v", err)
     }
 
-	if err := AllowPunchRules(punchRules, punch_list); err != nil {
+	if err := SetPunchRules(punchRules, punch_list); err != nil {
         log.Fatalf("Error punching rules: %v", err)
     }
 
@@ -190,8 +197,8 @@ func printStats(statsCh chan int, byteStatsMap goebpf.Map, packetStatsMap goebpf
 			bytesValue, err := byteStatsMap.Lookup(bytesKey)
 			if err == nil {
 				bytesPassed := binary.LittleEndian.Uint64(bytesValue)
-				kbps := float64(bytesPassed*8) / 1000
-				mbps := float64(bytesPassed*8) / (1000 * 1000)
+				kbps := float64(bytesPassed) / 1000
+				mbps := float64(bytesPassed) / (1000 * 1000)
 				log.Printf("Bytes Passed / Second: %d", bytesPassed)
 				log.Printf("Kb/s: %f", kbps)
 				log.Printf("Mb/s: %f", mbps)
@@ -308,7 +315,7 @@ func SetDefaultBehavior(ipAddreses []IPBehavior, defaultBehaviorMap goebpf.Map) 
 }
 
 // The function that adds the rules to the allowed BPF_MAP.
-func AllowPunchRules(punchRules []IPData, allowed goebpf.Map) error {
+func SetPunchRules(punchRules []IPData, allowed goebpf.Map) error {
     for _, data := range punchRules {
 		log.Println(data)
         for _, punchData := range data.Punch {
@@ -328,7 +335,20 @@ func AllowPunchRules(punchRules []IPData, allowed goebpf.Map) error {
 
 			log.Println(key, keyBytes, byte(punchData.Pass))
 
-            err := allowed.Insert(keyBytes, byte(punchData.Pass)) // Use nil since the value is not needed verifying rules.
+			value := BPFPunchMapValue {
+                pass:     punchData.Pass,
+                pps:      punchData.Ratelimit,
+                previous: uint64(0),
+            }
+
+			// Convert the value struct to a byte slice
+            valueBytes := make([]byte, 10)
+            valueBytes[0] = value.pass
+            binary.BigEndian.PutUint32(valueBytes[1:5], value.pps)
+            // No need to put previous because it will be init to 0s.
+
+			// Apply the byte structures to the map.
+            err := allowed.Insert(keyBytes, valueBytes) // Use nil since the value is not needed verifying rules.
             if err != nil {
                 return err
             }

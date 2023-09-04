@@ -101,12 +101,14 @@ struct punch_key
 {
   __u32 address; // 32-bit IP address
   __u16 port;    // 16-bit Port number
-  __u8 protocol; // 8-bit Protocol number
-  __u8 padding;
+  __u8  protocol; // 8-bit Protocol number
+  __u8  padding;
 };
+
 struct punch_value
 {
   __u8 pass;      // 8-bit allow/block value
+  __u32 pps;       // PPS allowed
   __u64 previous; // 64-bit kernel ns time
 };
 
@@ -128,10 +130,17 @@ BPF_MAP_DEF(defaultBehavior) = {
 };
 BPF_MAP_ADD(defaultBehavior);
 
-// Function to lookup punch data in the punch_list map
+/**
+ * Function to lookup punch data in the punch_list map.
+ * 2 results in no action.
+ * 1 to pass.
+ * 0 to drop.
+**/ 
 __u64 lookup_punch_data(__u32 daddr, __u16 dport, __u8 protocol, struct bpf_map_def *punch_list)
 {
   int authorized = 2; // 2 results in no action; 1 to pass; 0 to drop.
+
+  __u64 current_ns = bpf_ktime_get_ns();
 
   struct punch_key punch_key_ctx;
   memset(&punch_key_ctx, 0, sizeof(punch_key_ctx));
@@ -144,9 +153,31 @@ __u64 lookup_punch_data(__u32 daddr, __u16 dport, __u8 protocol, struct bpf_map_
   if (punch_rule_idx)
   {
     // Matched, increase match counter for matched "rule"
-    __u8 index = *(__u8 *)punch_rule_idx; // make verifier happy
-    // Return 1 to indicate a match
-    authorized = index;
+    __u8 pass = *(__u8 *)punch_rule_idx; // make verifier happy
+
+    // Move the pointer to the next 32-bit value (pps)
+    punch_rule_idx = (__u64 *)((__u8 *)punch_rule_idx + sizeof(__u8));
+    __u32 pps = *(__u32 *)punch_rule_idx;
+
+    // Move the pointer to the next 64-bit value (previous)
+    punch_rule_idx = (__u64 *)((__u8 *)punch_rule_idx + sizeof(__u32));
+    __u64 previous_ns = *(__u64 *)punch_rule_idx;
+    // Check if the PPS rate is within limits
+    if (pps == 0)
+    {
+      authorized = pass; // Allow the packet
+    }
+    else if (current_ns - previous_ns >= (1000000000 / pps)) // 1 second in nanoseconds
+    {
+      // Update the previous_ns value
+      previous_ns = current_ns;
+      bpf_map_update_elem(punch_list, &punch_key_ctx, &previous_ns, BPF_ANY);
+      authorized = pass; // Allow the packet
+    }
+    else
+    {
+      authorized = 0; // Drop the packet due to rate limiting
+    }
   }
 
   return authorized;
