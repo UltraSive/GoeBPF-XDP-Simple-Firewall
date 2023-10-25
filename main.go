@@ -6,6 +6,7 @@ import (
 	"os"
 	"net"
 	"encoding/binary"
+	"encoding/json"
 	"os/signal"
 	"time"
 
@@ -14,15 +15,15 @@ import (
 
 // Simple source address block / accept structure.
 type sourceIP struct {
-	saddr  string
-	allow  bool
+	IP    string `json:"ip"`
+	Allow bool   `json:"allow"`
 }
 
 // IP Pairs and whether to block or allow stucture.
 type ipPair struct {
-	saddr  string
-	daddr  string
-	allow  bool
+	SrcIP string `json:"src_ip"`
+	DstIP string `json:"dst_ip"`
+	Allow bool   `json:"allow"`
 }
 
 // Struct to represent the key with 8 bytes identical to the ipPair map
@@ -33,15 +34,15 @@ type BPFAddressPairMapKey struct {
 
 // IP data for use with port punching whitelist
 type IPData struct {
-	IP       string
-	Punch	 []PunchData
+	IP       string      `json:"ip"`
+	Punch	 []PunchData `json:"punch"`
 }
 
 type PunchData struct {
-	Pass      uint8
-	Port      uint16
-	Protocol  uint8
-	Ratelimit uint32
+	Pass      uint8  `json:"pass"`
+	Port      uint16 `json:"port"`
+	Protocol  uint8  `json:"protocol"`
+	Ratelimit uint32 `json:"rate_limit"`
 }
 
 // Struct to represent the key with 8 bytes identical to the punch map
@@ -59,53 +60,41 @@ type BPFPunchMapValue struct {
 }
 
 type IPBehavior struct {
-	IP       string
-	allow    bool // true == accept default, false == drop default
+	IP       string `json:"ip"`
+	Allow    bool   `json:"allow"` // true == accept default, false == drop default
+}
+
+type Configuration struct {
+    InterfaceName    string       `json:"interface_name"`
+    IPSources        []sourceIP   `json:"ip_source_list"`
+    IPPairs          []ipPair     `json:"ip_pair_list"`
+    IPData           []IPData     `json:"punch_rules"`
+    DefaultBehaviors []IPBehavior `json:"default_behaviors"`
 }
 
 func main() {
-	// Specify Interface Name
-	interfaceName := "wlo1"
-	// IP source list
-	// Add the IPs you want to be blocked or allowed universally.
-	ipSourceList := []sourceIP{
-		{"192.168.0.135", true}, // Allow universally from this address.
-		{"45.32.193.177", false}, // Block universally from this address.
-	}
-	// IP AllowList
-	// Add the IPs you want to be allowed
-	ipPairList := []ipPair{
-		{"47.186.105.124", "216.126.237.26", true}, // allow
-		{"45.32.193.17", "216.126.237.26", false}, // block
-	}
-	// IP port and protocol punching rules
-	// Example data for allowed IP addresses with multiple punchdata
-	punchRules := []IPData{
-		{
-			IP: "127.0.0.1",
-			Punch: []PunchData{
-				{1, 80, 6, 100}, // Pass: True, Port: 80, Protocol: TCP (6), Ratelimit: 100 PPS
-				{0, 443, 6, 0}, // Pass: False, Port: 443, Protocol: TCP (6), Ratelimit: N/A
-			},
-		},
-		{
-			IP: "192.168.0.116",
-			Punch: []PunchData{
-				{1, 22, 6, 0},
-				{1, 80, 6, 100},
-				{1, 443, 6, 0},
-				{1, 0, 1, 0}, // ICMP
-			},
-		},
-		// Add more allowed IP data with punchdata as needed
-	}
-	// Default allow or drop behavior per IP
-	defaultBehaviors := []IPBehavior{
-		{
-			IP: "216.126.237.26",
-			allow: true, // Accept default
-		},
-	}
+	// Read the JSON file
+    file, configError := os.Open("config.json")
+    if configError != nil {
+        fmt.Println("Error opening file:", configError)
+        return
+    }
+    defer file.Close()
+
+	decoder := json.NewDecoder(file)
+    var config Configuration
+
+    decodingError := decoder.Decode(&config)
+    if decodingError != nil {
+        fmt.Println("Error decoding JSON:", decodingError)
+        return
+    }
+
+    fmt.Printf("Interface Name: %s\n", config.InterfaceName)
+    fmt.Printf("IP Sources: %v\n", config.IPSources)
+    fmt.Printf("IP Pairs: %v\n", config.IPPairs)
+    fmt.Printf("Punch Rules: %v\n", config.IPData)
+    fmt.Printf("Default Behaviors: %v\n", config.DefaultBehaviors)
 
 	// Load XDP Into App
 	bpf := goebpf.NewDefaultEbpfSystem()
@@ -145,25 +134,25 @@ func main() {
 	if err != nil {
 		fmt.Printf("xdp.Attach(): %v", err)
 	}
-	err = xdp.Attach(interfaceName)
+	err = xdp.Attach(config.InterfaceName)
 	if err != nil {
 		log.Fatalf("Error attaching to Interface: %s", err)
 	}
 
 	// Load the rules into maps.
-	if err := SourceIPAddresses(ipSourceList, sourcelist); err != nil {
+	if err := SourceIPAddresses(config.IPSources, sourcelist); err != nil {
         log.Fatalf("Error blocking IP addresses: %v", err)
     }
 
-	if err := SetAddressesPairs(ipPairList, addressPair); err != nil {
+	if err := SetAddressesPairs(config.IPPairs, addressPair); err != nil {
 		log.Fatalf("Error setting IP address pair list rules: %v", err)
     }
 
-	if err := SetDefaultBehavior(defaultBehaviors, defaultBehavior); err != nil {
+	if err := SetDefaultBehavior(config.DefaultBehaviors, defaultBehavior); err != nil {
 		log.Fatalf("Error allowing IP addresses: %v", err)
     }
 
-	if err := SetPunchRules(punchRules, punch_list); err != nil {
+	if err := SetPunchRules(config.IPData, punch_list); err != nil {
         log.Fatalf("Error punching rules: %v", err)
     }
 
@@ -196,7 +185,7 @@ func printStats(statsCh chan int, byteStatsMap goebpf.Map, packetStatsMap goebpf
 			var bytesKey uint32 = 1
 			bytesValue, err := byteStatsMap.Lookup(bytesKey)
 			if err == nil {
-				bytesPassed := binary.LittleEndian.Uint64(bytesValue)
+				bytesPassed := binary.LittleEndian.Uint64(bytesValue) / 8
 				kbps := float64(bytesPassed) / 1000
 				mbps := float64(bytesPassed) / (1000 * 1000)
 				log.Printf("Bytes Passed / Second: %d", bytesPassed)
@@ -250,15 +239,15 @@ func printStats(statsCh chan int, byteStatsMap goebpf.Map, packetStatsMap goebpf
 // The function that adds the IPs to the sourcelist map.
 func SourceIPAddresses(ipAddreses []sourceIP, sourcelist goebpf.Map) error {
 	for _, source := range ipAddreses {
-		log.Println(source.saddr, source.allow)
+		log.Println(source.IP, source.Allow)
 
 		// Set the value allow byte
 		allowValue := byte(0)
-		if source.allow {
+		if source.Allow {
 			allowValue = byte(1)
 		}
 
-		err := sourcelist.Insert(goebpf.CreateLPMtrieKey(source.saddr), allowValue)
+		err := sourcelist.Insert(goebpf.CreateLPMtrieKey(source.IP), allowValue)
 		if err != nil {
 			return err
 		}
@@ -269,11 +258,11 @@ func SourceIPAddresses(ipAddreses []sourceIP, sourcelist goebpf.Map) error {
 // The function that adds the IP pairs to the addressPair map with the corresponding value for pass or drop.
 func SetAddressesPairs(ipPairList []ipPair, addressPair goebpf.Map) error {
 	for _, ipPair := range ipPairList {
-		log.Println(ipPair.saddr, ipPair.daddr, ipPair.allow)
+		log.Println(ipPair.SrcIP, ipPair.DstIP, ipPair.Allow)
 		// Create the key struct
 		key := BPFAddressPairMapKey {
-			saddr: binary.BigEndian.Uint32(net.ParseIP(ipPair.saddr).To4()),
-			daddr: binary.BigEndian.Uint32(net.ParseIP(ipPair.daddr).To4()),
+			saddr: binary.BigEndian.Uint32(net.ParseIP(ipPair.SrcIP).To4()),
+			daddr: binary.BigEndian.Uint32(net.ParseIP(ipPair.DstIP).To4()),
 		}
 
 		// Convert the key struct to a byte slice thats compatible with the 64 bit map
@@ -283,7 +272,7 @@ func SetAddressesPairs(ipPairList []ipPair, addressPair goebpf.Map) error {
 
 		// Set the value allow byte
 		allowValue := byte(0)
-		if ipPair.allow {
+		if ipPair.Allow {
 			allowValue = byte(1)
 		}
 
@@ -300,7 +289,7 @@ func SetDefaultBehavior(ipAddreses []IPBehavior, defaultBehaviorMap goebpf.Map) 
 	for _, ipBehavior := range ipAddreses {
 		// Set the byte
 		allowValue := byte(0)
-		if ipBehavior.allow {
+		if ipBehavior.Allow {
 			allowValue = byte(1)
 		}
 
@@ -356,27 +345,3 @@ func SetPunchRules(punchRules []IPData, allowed goebpf.Map) error {
     }
     return nil
 }
-/*
-// Helper function to read and display statistics from a map
-func readAndDisplayStatistics(bpfMap goebpf.Map, mapName string) {
-    var keys []uint32
-    var values []uint64
-
-    // Iterate over the map to retrieve keys and values
-    err := bpfMap.Iterate(nil, func(key, value []byte) int {
-        keys = append(keys, binary.BigEndian.Uint32(key))
-        values = append(values, binary.LittleEndian.Uint64(value))
-        return 0
-    })
-    if err != nil {
-        log.Fatalf("Error iterating over %s map: %v", mapName, err)
-    }
-
-    // Display statistics
-    fmt.Printf("Statistics from %s map:\n", mapName)
-    for i, key := range keys {
-        fmt.Printf("Key: %d, Value: %d\n", key, values[i])
-    }
-    fmt.Println()
-}
-*/

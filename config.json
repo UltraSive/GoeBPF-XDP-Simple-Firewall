@@ -1,0 +1,25 @@
+{
+    "interface_name": "wlo1",
+    "ip_source_list": [
+      {"ip": "45.32.193.177", "allow": false}
+    ],
+    "ip_pair_list": [
+      {"src_ip": "47.186.105.124", "dst_ip": "216.126.237.26", "allow": true},
+      {"src_ip": "45.32.193.17", "dst_ip": "216.126.237.26", "allow": false}
+    ],
+    "punch_rules": [
+      {
+        "ip": "192.168.0.116",
+        "punch": [
+          {"pass": 1, "port": 22, "protocol": 6, "rate_limit": 0},
+          {"pass": 0, "port": 80, "protocol": 6, "rate_limit": 0},
+          {"pass": 1, "port": 443, "protocol": 6, "rate_limit": 0},
+          {"pass": 1, "port": 0, "protocol": 1, "rate_limit": 0}
+        ]
+      }
+    ],
+    "default_behaviors": [
+      {"ip": "192.168.0.116", "allow": false}
+    ]
+  }
+  

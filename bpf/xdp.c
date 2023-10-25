@@ -1,9 +1,12 @@
 #include "../headers/bpf_helpers.h"
+#include <linux/if_ether.h>
+#include <linux/ip.h>
 #include <linux/tcp.h> // Include the TCP header definition
 #include <linux/udp.h> // Include the UDP header definition
 #include <stdint.h>    // Include this header for uint16_t
 
 // Ethernet header
+/*
 struct ethhdr
 {
   __u8 h_dest[6];
@@ -26,6 +29,7 @@ struct iphdr
   __u32 saddr;
   __u32 daddr;
 } __attribute__((packed));
+*/
 
 /*
  * Stats collection for monitoring performance.
@@ -129,6 +133,16 @@ BPF_MAP_DEF(defaultBehavior) = {
     .max_entries = 16,
 };
 BPF_MAP_ADD(defaultBehavior);
+
+// BPF Map to hold TCP SYN Cookies
+// BPF Default behavior Map
+BPF_MAP_DEF(TCP_SYN_Cookies) = {
+    .map_type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(__u64),
+    .value_size = sizeof(struct tcphdr),
+    .max_entries = 1024,
+};
+BPF_MAP_ADD(TCP_SYN_Cookies);
 
 /**
  * Function to lookup punch data in the punch_list map.
